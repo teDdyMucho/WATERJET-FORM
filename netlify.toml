@@ -1,0 +1,6 @@
+# This project is a static HTML page — no Node build step, no package.json.
+# The actual backend (database, storage, virus scanning) already runs on
+# Supabase Edge Functions; Netlify's only job is to serve index.html.
+
+[build]
+  publish = "."
