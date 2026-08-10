@@ -555,5 +555,28 @@
 })();
 </script>
 
+<script>
+// Reports this page's height to the parent window whenever it changes
+// (initial load, CAPTCHA errors appearing, textarea resize, etc.), so a
+// WordPress <iframe> embedding this page can auto-size to fit exactly.
+(function () {
+  "use strict";
+  if (window.parent === window) return; // not embedded in an iframe
+
+  var lastHeight = 0;
+  function reportHeight() {
+    var height = document.documentElement.scrollHeight;
+    if (height !== lastHeight) {
+      lastHeight = height;
+      window.parent.postMessage({ wjContactFormHeight: height }, "*");
+    }
+  }
+
+  new ResizeObserver(reportHeight).observe(document.body);
+  window.addEventListener("load", reportHeight);
+  reportHeight();
+})();
+</script>
+
 </body>
 </html>
