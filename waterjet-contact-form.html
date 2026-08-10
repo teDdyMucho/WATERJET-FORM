@@ -1,0 +1,562 @@
+<!-- ============================================================
+  Waterjet Contact Form
+  ------------------------------------------------------------
+  Embed in WordPress via a "Custom HTML" block (paste this whole
+  file's contents) or host it and embed with an <iframe>.
+
+  SUPABASE SETUP (fill in once you have your project):
+  1. Create a Supabase project.
+  2. Create a table, e.g.:
+
+     create table contact_messages (
+       id uuid primary key default gen_random_uuid(),
+       name text not null,
+       email text not null,
+       phone text,
+       message text not null,
+       file_1_url text,
+       file_2_url text,
+       created_at timestamptz not null default now()
+     );
+
+     alter table contact_messages enable row level security;
+
+     create policy "Allow public insert"
+       on contact_messages for insert
+       to anon
+       with check (true);
+
+  3. Create a Storage bucket (e.g. "design-files") for attachments,
+     and add a policy allowing anon uploads (insert) to that bucket.
+
+  4. Fill in SUPABASE_URL and SUPABASE_ANON_KEY below.
+  5. Set SUPABASE_ENABLED = true.
+============================================================= -->
+<div id="wj-contact-form-root">
+  <style>
+    #wj-contact-form-root {
+      --wj-border: #333;
+      --wj-blue: #1a5aa8;
+      --wj-bg: #fdfdfb;
+      --wj-error: #c0392b;
+      font-family: Arial, Helvetica, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      background: var(--wj-bg);
+      border: 2px solid var(--wj-border);
+      border-radius: 6px;
+      padding: 28px 32px 24px;
+      box-sizing: border-box;
+      color: #222;
+    }
+    #wj-contact-form-root * { box-sizing: border-box; }
+    #wj-contact-form-root h2 {
+      text-align: center;
+      color: var(--wj-blue);
+      font-weight: bold;
+      font-size: 22px;
+      margin: 0 0 22px;
+    }
+    .wj-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+    }
+    .wj-row label {
+      width: 110px;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+    .wj-row input[type="text"],
+    .wj-row input[type="email"],
+    .wj-row input[type="tel"] {
+      flex: 1 1 280px;
+      min-width: 160px;
+      padding: 5px 7px;
+      border: 1px solid #888;
+      border-radius: 2px;
+      font-size: 14px;
+    }
+    .wj-hint {
+      margin-left: 10px;
+      font-size: 13px;
+      color: #333;
+      white-space: nowrap;
+    }
+    .wj-hint.required { color: #222; }
+    .wj-message-label {
+      font-size: 14px;
+      margin-bottom: 6px;
+      display: block;
+    }
+    .wj-message-wrap { margin-bottom: 16px; }
+    #wj-message {
+      width: 100%;
+      height: 220px;
+      padding: 8px;
+      border: 1px solid #888;
+      border-radius: 2px;
+      font-size: 14px;
+      font-family: inherit;
+      resize: vertical;
+    }
+    .wj-files { margin-bottom: 18px; }
+    .wj-files > label { font-size: 14px; display: block; margin-bottom: 8px; }
+    .wj-file-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    .wj-file-row input[type="file"] { font-size: 13px; }
+    .wj-captcha-block {
+      text-align: center;
+      margin: 10px 0 18px;
+    }
+    #wj-captcha-canvas {
+      border: 1px solid #999;
+      border-radius: 4px;
+      background: #f4f4f4;
+      cursor: pointer;
+      vertical-align: middle;
+    }
+    .wj-captcha-refresh {
+      margin-left: 8px;
+      font-size: 12px;
+      color: var(--wj-blue);
+      background: none;
+      border: none;
+      text-decoration: underline;
+      cursor: pointer;
+      vertical-align: middle;
+    }
+    .wj-captcha-text {
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    .wj-captcha-input-row {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .wj-captcha-input-row input {
+      width: 100px;
+      padding: 5px 7px;
+      border: 1px solid #888;
+      border-radius: 2px;
+      font-size: 14px;
+      text-align: center;
+    }
+    .wj-actions {
+      text-align: center;
+      margin-top: 6px;
+    }
+    .wj-actions button {
+      font-size: 14px;
+      padding: 6px 18px;
+      margin: 0 6px;
+      border: 1px solid #666;
+      border-radius: 3px;
+      background: #eee;
+      cursor: pointer;
+    }
+    .wj-actions button:hover { background: #e2e2e2; }
+    .wj-actions button:disabled { opacity: 0.6; cursor: not-allowed; }
+    #wj-send-btn {
+      background: #eaeaea;
+      font-weight: bold;
+    }
+    .wj-note {
+      text-align: center;
+      font-style: italic;
+      font-size: 12.5px;
+      color: #444;
+      margin-top: 10px;
+    }
+    .wj-field-error {
+      color: var(--wj-error);
+      font-size: 12.5px;
+      width: 100%;
+      margin: -8px 0 8px 120px;
+      display: none;
+    }
+    .wj-field-error.show { display: block; }
+    .wj-status {
+      text-align: center;
+      font-size: 14px;
+      margin-top: 14px;
+      min-height: 20px;
+    }
+    .wj-status.success { color: #1a7a1a; }
+    .wj-status.error { color: var(--wj-error); }
+    @media (max-width: 480px) {
+      .wj-row label { width: 100%; margin-bottom: 4px; }
+      .wj-field-error { margin-left: 0; }
+    }
+  </style>
+
+  <h2>Send Us A Message</h2>
+
+  <form id="wj-contact-form" novalidate>
+    <div class="wj-row">
+      <label for="wj-name">Your Name:</label>
+      <input type="text" id="wj-name" name="name" autocomplete="name" />
+      <span class="wj-hint required">Required</span>
+    </div>
+    <div class="wj-field-error" id="err-name">Please enter your name.</div>
+
+    <div class="wj-row">
+      <label for="wj-email">Your Email:</label>
+      <input type="email" id="wj-email" name="email" autocomplete="email" />
+      <span class="wj-hint required">Required</span>
+    </div>
+    <div class="wj-field-error" id="err-email">Please enter a valid email address.</div>
+
+    <div class="wj-row">
+      <label for="wj-email2">Re-Type Email:</label>
+      <input type="email" id="wj-email2" name="email2" autocomplete="off" />
+      <span class="wj-hint required">Required</span>
+    </div>
+    <div class="wj-field-error" id="err-email2">Email addresses do not match.</div>
+
+    <div class="wj-row">
+      <label for="wj-phone">Your Phone:</label>
+      <input type="tel" id="wj-phone" name="phone" autocomplete="tel" />
+      <span class="wj-hint">Please include area code</span>
+    </div>
+
+    <div class="wj-message-wrap">
+      <label class="wj-message-label" for="wj-message">Message (Required):</label>
+      <textarea id="wj-message" name="message"></textarea>
+      <div class="wj-field-error" id="err-message" style="margin-left:0;">Please enter a message.</div>
+    </div>
+
+    <div class="wj-files">
+      <label>Attach design files: <span style="font-weight:normal; font-size:12.5px; color:#555;">(PDF, DXF, DWG, SVG, EPS, AI, STEP, ZIP, PNG, JPG — max 25MB each; scanned for viruses before delivery)</span></label>
+      <div class="wj-file-row">
+        <input type="file" id="wj-file-1" name="file1" accept=".pdf,.dxf,.dwg,.svg,.eps,.ai,.step,.stp,.zip,.png,.jpg,.jpeg" />
+        <span id="wj-file-1-label">No file chosen</span>
+      </div>
+      <div class="wj-field-error" id="err-file1" style="margin-left:0;"></div>
+      <div class="wj-file-row">
+        <input type="file" id="wj-file-2" name="file2" accept=".pdf,.dxf,.dwg,.svg,.eps,.ai,.step,.stp,.zip,.png,.jpg,.jpeg" />
+        <span id="wj-file-2-label">No file chosen</span>
+      </div>
+      <div class="wj-field-error" id="err-file2" style="margin-left:0;"></div>
+    </div>
+
+    <!-- Honeypot field: hidden from real users, bots often fill it in -->
+    <div style="position:absolute; left:-9999px; top:-9999px;" aria-hidden="true">
+      <label for="wj-website">Leave this field blank</label>
+      <input type="text" id="wj-website" name="website" tabindex="-1" autocomplete="off" />
+    </div>
+
+    <div class="wj-captcha-block">
+      <canvas id="wj-captcha-canvas" width="140" height="50" title="Click to refresh code"></canvas>
+      <button type="button" class="wj-captcha-refresh" id="wj-captcha-refresh">refresh code</button>
+      <div class="wj-captcha-text">CODE: Please type the code above into the box below:</div>
+      <div class="wj-captcha-input-row">
+        <input type="text" id="wj-captcha-input" autocomplete="off" />
+        <span class="wj-hint required">Required</span>
+      </div>
+      <div class="wj-field-error" id="err-captcha" style="margin-left:0;">Code does not match.</div>
+    </div>
+
+    <div class="wj-actions">
+      <button type="submit" id="wj-send-btn">Send Email</button>
+      <button type="button" id="wj-clear-btn">Clear Form</button>
+    </div>
+
+    <div class="wj-status" id="wj-status" role="status" aria-live="polite"></div>
+
+    <div class="wj-note">Note: This form may take a few minutes to process if sending large attachments.</div>
+  </form>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------
+  // SUPABASE CONFIG — fill these in once your project exists.
+  // The form does NOT talk to the database or storage directly.
+  // It POSTs to a Supabase Edge Function ("submit-contact-form"),
+  // which validates the submission, virus-scans any attachments
+  // via VirusTotal, and only then saves anything. This keeps the
+  // service_role key and scanning logic off the public page entirely.
+  // ---------------------------------------------------------------
+  var SUPABASE_ENABLED = true;
+  var SUPABASE_URL = "https://qalamskqhayfimavldnf.supabase.co";
+  var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhbGFtc2txaGF5ZmltYXZsZG5mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4NTg2MzEsImV4cCI6MjEwMTQzNDYzMX0.YN1n3QbPUkU3-yq0tIui7iuZMGMJSW2dc9aKOeviKnw";
+  var SUPABASE_FUNCTION_NAME = "submit-contact-form";
+
+  var root = document.getElementById("wj-contact-form-root");
+  var form = root.querySelector("#wj-contact-form");
+  var nameEl = root.querySelector("#wj-name");
+  var emailEl = root.querySelector("#wj-email");
+  var email2El = root.querySelector("#wj-email2");
+  var phoneEl = root.querySelector("#wj-phone");
+  var messageEl = root.querySelector("#wj-message");
+  var file1El = root.querySelector("#wj-file-1");
+  var file2El = root.querySelector("#wj-file-2");
+  var websiteEl = root.querySelector("#wj-website");
+  var captchaInput = root.querySelector("#wj-captcha-input");
+  var captchaCanvas = root.querySelector("#wj-captcha-canvas");
+  var captchaRefreshBtn = root.querySelector("#wj-captcha-refresh");
+  var sendBtn = root.querySelector("#wj-send-btn");
+  var clearBtn = root.querySelector("#wj-clear-btn");
+  var statusEl = root.querySelector("#wj-status");
+
+  var currentCaptcha = "";
+
+  var MAX_FILE_BYTES = 25 * 1024 * 1024; // 25MB, matches the Edge Function limit
+  var ALLOWED_EXTENSIONS = [".pdf", ".dxf", ".dwg", ".svg", ".eps", ".ai", ".png", ".jpg", ".jpeg", ".step", ".stp", ".zip"];
+
+  function getExtension(filename) {
+    var idx = filename.lastIndexOf(".");
+    return idx === -1 ? "" : filename.slice(idx).toLowerCase();
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function wireFileInput(inputEl, labelId, errorId) {
+    var labelEl = root.querySelector("#" + labelId);
+    inputEl.addEventListener("change", function () {
+      var file = inputEl.files[0];
+      showError(errorId, false);
+      if (!file) {
+        labelEl.textContent = "No file chosen";
+        return;
+      }
+      labelEl.textContent = file.name + " (" + formatBytes(file.size) + ")";
+
+      var errEl = root.querySelector("#" + errorId);
+      if (file.size > MAX_FILE_BYTES) {
+        errEl.textContent = "File is too large (max 25MB).";
+        errEl.classList.add("show");
+        inputEl.value = "";
+        labelEl.textContent = "No file chosen";
+      } else if (ALLOWED_EXTENSIONS.indexOf(getExtension(file.name)) === -1) {
+        errEl.textContent = "File type not allowed.";
+        errEl.classList.add("show");
+        inputEl.value = "";
+        labelEl.textContent = "No file chosen";
+      }
+    });
+  }
+
+  function randomCaptchaText(len) {
+    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no O/0/I/1 ambiguity
+    var out = "";
+    for (var i = 0; i < len; i++) {
+      out += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return out;
+  }
+
+  function drawCaptcha() {
+    currentCaptcha = randomCaptchaText(5);
+    var ctx = captchaCanvas.getContext("2d");
+    var w = captchaCanvas.width;
+    var h = captchaCanvas.height;
+
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#f4f4f4";
+    ctx.fillRect(0, 0, w, h);
+
+    // noise lines
+    for (var l = 0; l < 6; l++) {
+      ctx.strokeStyle = "rgba(0,0,0," + (0.15 + Math.random() * 0.2) + ")";
+      ctx.beginPath();
+      ctx.moveTo(Math.random() * w, Math.random() * h);
+      ctx.lineTo(Math.random() * w, Math.random() * h);
+      ctx.stroke();
+    }
+
+    // characters, each with random rotation/offset
+    var charWidth = w / currentCaptcha.length;
+    for (var i = 0; i < currentCaptcha.length; i++) {
+      var ch = currentCaptcha[i];
+      var x = charWidth * i + charWidth / 2;
+      var y = h / 2 + (Math.random() * 10 - 5);
+      var angle = (Math.random() * 40 - 20) * (Math.PI / 180);
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(angle);
+      ctx.font = "bold " + (22 + Math.floor(Math.random() * 6)) + "px Arial";
+      ctx.fillStyle = "rgb(" +
+        (20 + Math.floor(Math.random() * 60)) + "," +
+        (20 + Math.floor(Math.random() * 60)) + "," +
+        (20 + Math.floor(Math.random() * 60)) + ")";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(ch, 0, 0);
+      ctx.restore();
+    }
+
+    // noise dots
+    for (var d = 0; d < 40; d++) {
+      ctx.fillStyle = "rgba(0,0,0," + Math.random() * 0.3 + ")";
+      ctx.fillRect(Math.random() * w, Math.random() * h, 1.5, 1.5);
+    }
+
+    captchaInput.value = "";
+  }
+
+  drawCaptcha();
+  captchaCanvas.addEventListener("click", drawCaptcha);
+  captchaRefreshBtn.addEventListener("click", drawCaptcha);
+
+  wireFileInput(file1El, "wj-file-1-label", "err-file1");
+  wireFileInput(file2El, "wj-file-2-label", "err-file2");
+
+  function showError(id, show) {
+    var el = root.querySelector("#" + id);
+    if (!el) return;
+    el.classList.toggle("show", !!show);
+  }
+
+  function isValidEmail(v) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  }
+
+  function validate() {
+    var ok = true;
+
+    if (!nameEl.value.trim()) { showError("err-name", true); ok = false; }
+    else showError("err-name", false);
+
+    if (!isValidEmail(emailEl.value.trim())) { showError("err-email", true); ok = false; }
+    else showError("err-email", false);
+
+    if (!email2El.value.trim() || email2El.value.trim() !== emailEl.value.trim()) {
+      showError("err-email2", true); ok = false;
+    } else showError("err-email2", false);
+
+    if (!messageEl.value.trim()) { showError("err-message", true); ok = false; }
+    else showError("err-message", false);
+
+    if (captchaInput.value.trim().toUpperCase() !== currentCaptcha) {
+      showError("err-captcha", true); ok = false;
+    } else showError("err-captcha", false);
+
+    return ok;
+  }
+
+  function setStatus(msg, type) {
+    statusEl.textContent = msg;
+    statusEl.className = "wj-status" + (type ? " " + type : "");
+  }
+
+  function resetForm() {
+    form.reset();
+    showError("err-name", false);
+    showError("err-email", false);
+    showError("err-email2", false);
+    showError("err-message", false);
+    showError("err-captcha", false);
+    showError("err-file1", false);
+    showError("err-file2", false);
+    root.querySelector("#wj-file-1-label").textContent = "No file chosen";
+    root.querySelector("#wj-file-2-label").textContent = "No file chosen";
+    setStatus("", "");
+    drawCaptcha();
+  }
+
+  clearBtn.addEventListener("click", resetForm);
+
+  // Submits the whole form (fields + files) as multipart/form-data to the
+  // Edge Function. The function itself uploads to a private quarantine
+  // bucket, scans attachments with VirusTotal, and only saves the message
+  // if everything comes back clean. No storage or DB write ever happens
+  // directly from this page.
+  async function submitToEdgeFunction(fd) {
+    var resp = await fetch(SUPABASE_URL + "/functions/v1/" + SUPABASE_FUNCTION_NAME, {
+      method: "POST",
+      headers: {
+        "apikey": SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY
+        // Note: no Content-Type header — the browser sets the correct
+        // multipart/form-data boundary automatically for FormData bodies.
+      },
+      body: fd
+    });
+
+    var data = null;
+    try { data = await resp.json(); } catch (e) { /* ignore parse errors */ }
+
+    if (!resp.ok) {
+      var msg = (data && data.error) ? data.error : "Submission failed (" + resp.status + ").";
+      throw new Error(msg);
+    }
+
+    return data;
+  }
+
+  form.addEventListener("submit", async function (e) {
+    e.preventDefault();
+
+    // honeypot: silently succeed for bots without doing anything
+    if (websiteEl.value.trim() !== "") {
+      resetForm();
+      setStatus("Thank you, your message has been sent.", "success");
+      return;
+    }
+
+    if (!validate()) {
+      setStatus("Please correct the errors above.", "error");
+      return;
+    }
+
+    if (!SUPABASE_ENABLED) {
+      setStatus(
+        "Form validated successfully. Supabase is not configured yet — no data was sent. " +
+        "Fill in SUPABASE_URL / SUPABASE_ANON_KEY in the form's script to enable submissions.",
+        "error"
+      );
+      return;
+    }
+
+    sendBtn.disabled = true;
+    clearBtn.disabled = true;
+    setStatus("Sending your message, please wait...", "");
+
+    try {
+      var fd = new FormData();
+      fd.append("name", nameEl.value.trim());
+      fd.append("email", emailEl.value.trim());
+      fd.append("email2", email2El.value.trim());
+      fd.append("phone", phoneEl.value.trim());
+      fd.append("message", messageEl.value.trim());
+      fd.append("website", websiteEl.value.trim()); // honeypot
+      if (file1El.files[0]) fd.append("file1", file1El.files[0]);
+      if (file2El.files[0]) fd.append("file2", file2El.files[0]);
+
+      var hasFiles = !!(file1El.files[0] || file2El.files[0]);
+      await submitToEdgeFunction(fd);
+
+      resetForm();
+      setStatus(
+        hasFiles
+          ? "Thank you! Your message has been sent. Attached files are automatically scanned for safety before we can view them, which may take a few minutes."
+          : "Thank you! Your message has been sent successfully.",
+        "success"
+      );
+    } catch (err) {
+      setStatus(err.message || "Sorry, something went wrong sending your message. Please try again.", "error");
+    } finally {
+      sendBtn.disabled = false;
+      clearBtn.disabled = false;
+    }
+  });
+})();
+</script>
