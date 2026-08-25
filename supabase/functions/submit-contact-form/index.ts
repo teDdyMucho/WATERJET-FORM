@@ -17,12 +17,18 @@
 //      response has already been sent), submit each file to
 //      VirusTotal and poll for a verdict:
 //        - Clean  -> move file from quarantine to the private
-//                    "approved" bucket, update scan status.
+//                    "approved" bucket, update scan status, and
+//                    generate a temporary signed download URL.
 //        - Malicious/suspicious/error -> delete the file from
 //                    quarantine, mark it "rejected", and log it
 //                    in file_scan_log. It is NEVER moved to the
 //                    approved bucket and never becomes visible
 //                    to staff as a normal attachment.
+//   5. Once every attached file has finished scanning (or
+//      immediately, if none were attached), POST a JSON payload to
+//      an n8n webhook (N8N_WEBHOOK_URL) describing the lead and
+//      any attachments — n8n itself is responsible for actually
+//      sending the notification email to NOTIFICATION_EMAIL_TO.
 //
 // This avoids blocking the HTTP response on VirusTotal's queue,
 // which can take 1-3 minutes for a file it hasn't seen before —
@@ -35,6 +41,7 @@
 //   SUPABASE_URL              (auto-provided by the platform)
 //   SUPABASE_SERVICE_ROLE_KEY (auto-provided by the platform)
 //   VIRUSTOTAL_API_KEY        (set via `supabase secrets set`)
+//   N8N_WEBHOOK_URL            (set via `supabase secrets set`)
 // ============================================================
 
 import { createClient } from "npm:@supabase/supabase-js@2";
@@ -42,6 +49,9 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const VIRUSTOTAL_API_KEY = Deno.env.get("VIRUSTOTAL_API_KEY")!;
+
+const NOTIFICATION_EMAIL_TO = "mail@waterjetnaturalcutting.com";
+const SIGNED_URL_EXPIRY_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
 const QUARANTINE_BUCKET = "design-files-quarantine";
 const APPROVED_BUCKET = "design-files-approved";
@@ -143,8 +153,15 @@ function isClean(stats: Record<string, number> | null) {
   return malicious === 0 && suspicious === 0;
 }
 
+type FileScanResult = {
+  fileName: string;
+  status: "clean" | "rejected" | "error";
+  downloadUrl?: string;
+};
+
 // Runs after the HTTP response has already been sent. Scans one file,
-// then moves/deletes it and updates the DB row + audit log accordingly.
+// then moves/deletes it, updates the DB row + audit log, and (if clean)
+// generates a temporary signed download link for the notification email.
 async function scanAndFinalizeFile(
   supabase: ReturnType<typeof createClient>,
   messageId: string,
@@ -152,7 +169,7 @@ async function scanAndFinalizeFile(
   quarantinePath: string,
   originalName: string,
   bytes: Uint8Array,
-) {
+): Promise<FileScanResult> {
   const statusColumn = slot === 1 ? "file_1_scan_status" : "file_2_scan_status";
   const pathColumn = slot === 1 ? "file_1_path" : "file_2_path";
 
@@ -173,7 +190,7 @@ async function scanAndFinalizeFile(
         virustotal_stats: stats,
         detail: "File flagged by VirusTotal and was not delivered.",
       });
-      return;
+      return { fileName: originalName, status: "rejected" };
     }
 
     const approvedPath = `${crypto.randomUUID()}_${originalName.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
@@ -196,6 +213,17 @@ async function scanAndFinalizeFile(
       status: "clean",
       virustotal_stats: stats,
     });
+
+    const { data: signedUrlData, error: signedUrlErr } = await supabase.storage
+      .from(APPROVED_BUCKET)
+      .createSignedUrl(approvedPath, SIGNED_URL_EXPIRY_SECONDS);
+
+    if (signedUrlErr || !signedUrlData) {
+      console.error("Failed to create signed URL for", approvedPath, signedUrlErr);
+      return { fileName: originalName, status: "clean" };
+    }
+
+    return { fileName: originalName, status: "clean", downloadUrl: signedUrlData.signedUrl };
   } catch (err) {
     // Fail closed: any scanning error results in the file being withheld,
     // never silently delivered unscanned.
@@ -211,6 +239,52 @@ async function scanAndFinalizeFile(
       status: "error",
       detail: (err as Error).message,
     });
+    return { fileName: originalName, status: "error" };
+  }
+}
+
+// Notifies n8n (which sends the actual email) once all attachments (if
+// any) have finished scanning. Silently skips, with a logged warning, if
+// N8N_WEBHOOK_URL hasn't been configured, so a missing/misconfigured
+// webhook never breaks the actual form submission.
+async function sendLeadNotificationWebhook(
+  fields: { name: string; email: string; phone: string; message: string },
+  fileResults: FileScanResult[],
+) {
+  const webhookUrl = Deno.env.get("N8N_WEBHOOK_URL");
+
+  if (!webhookUrl) {
+    console.warn("N8N_WEBHOOK_URL not configured — skipping lead notification webhook.");
+    return;
+  }
+
+  const payload = {
+    event: "new_lead",
+    submittedAt: new Date().toISOString(),
+    subject: "New lead has entered through the website",
+    notificationEmail: NOTIFICATION_EMAIL_TO,
+    lead: {
+      name: fields.name,
+      email: fields.email,
+      phone: fields.phone || null,
+      message: fields.message,
+    },
+    attachments: fileResults.map((f) => ({
+      fileName: f.fileName,
+      status: f.status, // "clean" | "rejected" | "error"
+      downloadUrl: f.downloadUrl ?? null,
+      downloadLinkExpiresInDays: f.status === "clean" && f.downloadUrl ? 7 : null,
+    })),
+  };
+
+  const resp = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    console.error(`n8n webhook call failed: ${resp.status} ${await resp.text().catch(() => "")}`);
   }
 }
 
@@ -307,12 +381,20 @@ Deno.serve(async (req: Request) => {
     if (insertErr) throw new Error(`Database insert failed: ${insertErr.message}`);
 
     // Kick off scanning in the background — the browser does not wait.
-    for (const pf of pendingFiles) {
-      // deno-lint-ignore no-explicit-any
-      (globalThis as any).EdgeRuntime?.waitUntil(
-        scanAndFinalizeFile(supabase, inserted.id, pf.slot, pf.quarantinePath, pf.originalName, pf.bytes),
-      );
-    }
+    // Once every attached file has a final verdict (or immediately, if none
+    // were attached), notify n8n exactly once so it can send the email.
+    const scanResultsPromise: Promise<FileScanResult[]> = pendingFiles.length > 0
+      ? Promise.all(pendingFiles.map((pf) =>
+          scanAndFinalizeFile(supabase, inserted.id, pf.slot, pf.quarantinePath, pf.originalName, pf.bytes)
+        ))
+      : Promise.resolve([]);
+
+    // deno-lint-ignore no-explicit-any
+    (globalThis as any).EdgeRuntime?.waitUntil(
+      scanResultsPromise
+        .then((fileResults) => sendLeadNotificationWebhook({ name, email, phone, message }, fileResults))
+        .catch((err) => console.error("Lead notification webhook failed:", err)),
+    );
 
     return jsonResponse({ success: true });
   } catch (err) {
