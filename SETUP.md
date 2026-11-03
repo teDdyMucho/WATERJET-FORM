@@ -1,143 +1,54 @@
 # Waterjet Contact Form — Setup Guide
 
-**Status: deployed and live.** The Edge Function is running on your Supabase
-project (`qalamskqhayfimavldnf`), the database schema and private storage
-buckets are created, and `waterjet-contact-form.html` is already configured
-with your project's URL and anon key. You can embed it in WordPress now.
+The form is a single static page (`index.html`) hosted on Netlify and
+embedded into WordPress with an iframe. Submissions are handled by
+**Netlify Forms**: Netlify stores each submission, including file
+attachments, then runs a small function that POSTs it to an **n8n webhook**. The n8n workflow sends
+the email to the business. There is no database or other backend to
+keep running.
 
-This form is built so that **no attachment is ever stored or accessible until
-it has been scanned by VirusTotal and confirmed clean**. Files land in a
-private "quarantine" bucket, get scanned server-side by a Supabase Edge
-Function, and only move to a private "approved" bucket if the scan comes
-back clean. The browser never talks to the database or storage directly —
-only to the Edge Function.
+## Files
 
-## How submissions work (async scanning)
+- `index.html` — the form. Netlify serves it and detects the form at deploy time.
+- `waterjet-contact-form.html` — the snippet to paste into a WordPress **Custom HTML** block. It embeds the Netlify page in an iframe that resizes to fit.
+- `netlify/functions/submission-created.js` — runs automatically after every non-spam submission and forwards it to n8n in the same JSON format the old setup used.
+- `netlify.toml` — tells Netlify to publish the folder as-is (no build step) and where the function lives.
 
-VirusTotal can take anywhere from a few seconds to a couple of minutes to
-fully scan a file it hasn't seen before — too long for a visitor to sit and
-wait on a web form. So the flow is split in two:
+## One-time Netlify setup
 
-1. **Immediate (what the visitor waits for, ~1-3 seconds):** the form fields
-   are validated, any attached files are uploaded straight into the private
-   `design-files-quarantine` bucket, and a row is inserted into
-   `contact_messages` with `file_1_scan_status` / `file_2_scan_status` set to
-   `pending` (or `none` if no file was attached). The visitor immediately
-   sees a success message.
-2. **Background (invisible to the visitor, seconds to a few minutes later):**
-   the Edge Function keeps running after the response was sent (via
-   `EdgeRuntime.waitUntil`) and submits each file to VirusTotal:
-   - **Clean** → file is moved to the private `design-files-approved`
-     bucket, and the row's status flips to `clean`.
-   - **Malicious/suspicious/scan error** → the file is deleted from
-     quarantine, the row's status flips to `rejected`, and the event is
-     recorded in the `file_scan_log` audit table. The file is never moved
-     to the approved bucket and never becomes accessible to anyone.
+1. **Deploy** this folder to the Netlify site (push to the connected Git repo, or drag the folder into Netlify's deploy page).
+2. **Turn on form detection.** In the Netlify dashboard open the site, go to **Forms**, and click **Enable form detection**. Then trigger a new deploy so Netlify picks up the form. A form named `contact` should appear under Forms.
+3. **Nothing to add under Form submission notifications.** The function already sends every submission to `https://primary-production-6722.up.railway.app/webhook/newlead-website-waterjet`. Adding an HTTP POST notification there too would send each lead twice. To point at a different webhook later, set `N8N_WEBHOOK_URL` under **Project configuration → Environment variables** and redeploy.
+4. **Embed in WordPress.** Open `waterjet-contact-form.html`, replace `https://YOUR-SITE.netlify.app/` with the real Netlify URL, and paste the snippet into a Custom HTML block.
 
-Because of this, when you check the `contact_messages` table shortly after a
-submission comes in, an attached file's status may briefly read `pending` —
-give it a minute or two, then refresh.
+## What n8n receives
 
-## Files in this project
+The same payload the old setup sent, so the existing n8n workflow works unchanged:
 
-- `waterjet-contact-form.html` — the embeddable form (paste into WordPress). Already configured with live Supabase URL/anon key.
-- `supabase/schema.sql` — original schema reference (kept for documentation; the applied version lives in `supabase/migrations/`).
-- `supabase/migrations/` — the two migrations actually applied to your database via `supabase db push`.
-- `supabase/functions/submit-contact-form/index.ts` — the deployed Edge Function.
-- `.env` — your real credentials (already filled in). **Never commit this file or share it.**
-- `.env.example` — safe template with placeholder values only.
-- `.gitignore` — excludes `.env` if you ever put this project under git.
-
-## Checking submissions
-
-**Table Editor → `contact_messages`** in the Supabase Dashboard shows every
-message. Columns of note:
-- `file_1_scan_status` / `file_2_scan_status`: `none | pending | clean | rejected`
-- `file_1_name` / `file_2_name`: original filename as uploaded
-- `file_1_path` / `file_2_path`: storage path in `design-files-approved`, only populated once `clean`
-
-**Table Editor → `file_scan_log`** shows every scan attempt, including
-rejected/malicious files and their VirusTotal detection stats — useful if
-you ever want to know *why* something was blocked.
-
-**Downloading an approved file:** buckets are private by design, so there
-are no public URLs. In the Supabase Dashboard, go to **Storage →
-design-files-approved**, find the file, and use "Create signed URL" to get
-a temporary (e.g. 1 hour) download link. Never make the bucket public.
-
-## Re-deploying after a code change
-
-If you ever edit `supabase/functions/submit-contact-form/index.ts`:
-
-```bash
-cd "path/to/WATERJET FORM"
-$env:SUPABASE_ACCESS_TOKEN = "your-personal-access-token"   # PowerShell
-npx -y supabase functions deploy submit-contact-form --no-verify-jwt
+```json
+{
+  "event": "new_lead",
+  "submittedAt": "2026-11-03T12:00:00.000Z",
+  "subject": "New lead has entered through the website",
+  "notificationEmail": "mail@waterjetnaturalcutting.com",
+  "lead": { "name": "…", "email": "…", "phone": "… or null", "message": "…" },
+  "attachments": [
+    { "fileName": "design.pdf", "status": "unscanned", "downloadUrl": "https://…", "downloadLinkExpiresInDays": null }
+  ]
+}
 ```
 
-If you ever add a new migration file under `supabase/migrations/`:
+Two values differ from before: attachment `status` is now `unscanned`
+(it used to be `clean`), and `downloadLinkExpiresInDays` is `null`.
 
-```bash
-npx -y supabase db push --linked --yes
-```
+## Test it
 
-(A personal access token can be generated at
-https://supabase.com/dashboard/account/tokens — treat it like a password.)
+Submit the live form with a small attachment. The email should arrive within a minute or two. If it doesn't, check two places. In Netlify, open **Forms → contact**: a submission flagged under **Spam submissions** does not trigger the webhook. In n8n, open the workflow's **Executions** to see whether the webhook fired and which step failed.
 
-## Embed in WordPress
+## Limits and trade-offs
 
-Paste the entire contents of `waterjet-contact-form.html` into a
-**Custom HTML** block (or the Code Editor view of the page/post). No further
-edits are needed — it's already pointed at your live project.
-
-## Test it yourself
-
-1. Load the page, fill out the form, attach a small test file, solve the
-   CAPTCHA, and submit.
-2. You should see a success message within a couple of seconds.
-3. In the Supabase Dashboard → Table Editor → `contact_messages`, find your
-   row. `file_1_scan_status` will likely show `pending` at first — refresh
-   after a minute or two to see it flip to `clean`.
-4. Check **Storage → design-files-approved** to confirm the file arrived.
-
-This was already verified end-to-end during setup, including confirming
-that a deliberately malicious test file (the industry-standard EICAR test
-string, flagged by 55 antivirus engines) was correctly rejected, deleted
-from quarantine, and never reached the approved bucket or the visible
-message record.
-
-## How this avoids the "uploaded malware got the site hacked" scenario
-
-- **Private buckets only.** Neither storage bucket is public, and the anon
-  key has no storage policies granting it access. A malicious file can
-  never be fetched as a URL, even by direct link guessing.
-- **Scan before store.** Files are scanned in quarantine; nothing is moved
-  to the approved bucket, and no status ever reads "clean," until
-  VirusTotal returns a clean verdict.
-- **Fail closed.** If the VirusTotal scan errors out or times out, the file
-  is deleted and marked `rejected` rather than silently accepted unscanned.
-- **Type and size allowlist.** Only design-file extensions
-  (PDF/DXF/DWG/SVG/EPS/AI/STEP/ZIP/PNG/JPG) up to 25MB are accepted — no
-  executables, scripts, or arbitrary file types.
-- **No direct client writes.** The service_role key (the only credential
-  that can write to storage/DB) lives solely in the Edge Function's runtime
-  (auto-injected by Supabase) — it is never present in the WordPress page's
-  HTML/JS, so it can't be extracted by viewing page source.
-- **Full audit trail.** Every scan attempt — clean or rejected — is logged
-  in `file_scan_log` with the VirusTotal detection stats, so nothing is
-  silently lost and you can always see what was blocked and why.
-- **Staff access via signed URLs only**, generated on demand from the
-  Supabase Dashboard — never permanent public links.
-
-## Optional next steps
-
-- Lock down `Access-Control-Allow-Origin` in `index.ts` (currently `*`) to
-  your actual WordPress domain once it's live, then redeploy.
-- Add an email notification (e.g. via Resend or SendGrid) inside the Edge
-  Function after a successful insert, or after a scan completes, so you get
-  notified per submission instead of checking Supabase manually.
-- Add simple rate-limiting (e.g. by IP, using a Supabase table) if spam
-  becomes an issue despite the CAPTCHA and honeypot.
-- Build a small internal staff dashboard (Supabase Auth + a protected page)
-  to browse `contact_messages` and generate signed download URls without
-  needing the Supabase Dashboard.
+- **Attachments:** at most 8MB combined per submission (a Netlify limit). The form blocks larger uploads before sending.
+- **Allowed file types:** PDF, DXF, DWG, SVG, EPS, AI, STEP/STP, ZIP, PNG, JPG.
+- **No virus scanning.** The previous Supabase setup scanned files with VirusTotal. Netlify does not. Treat attachments from unknown senders with normal caution.
+- **Monthly submission and upload quotas** depend on the Netlify plan. Check the site's Forms usage page if traffic grows.
+- **Spam protection:** a hidden honeypot field, the on-page code check, and Netlify's built-in spam filter.

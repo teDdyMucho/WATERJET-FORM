@@ -1,6 +1,11 @@
-# This project is a static HTML page — no Node build step, no package.json.
-# The actual backend (database, storage, virus scanning) already runs on
-# Supabase Edge Functions; Netlify's only job is to serve index.html.
+# Static HTML page — no build step, no package.json.
+# Form submissions are handled by Netlify Forms, which detects the
+# <form data-netlify="true"> in index.html at deploy time. After each
+# submission Netlify runs netlify/functions/submission-created.js,
+# which forwards the lead to the n8n webhook that sends the email.
 
 [build]
   publish = "."
+
+[functions]
+  directory = "netlify/functions"

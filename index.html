@@ -18,13 +18,14 @@
 <!-- ============================================================
   Waterjet Contact Form
   ------------------------------------------------------------
-  This is the Netlify-hosted standalone version of the form, meant
-  to be embedded into WordPress via <iframe src="https://YOUR-SITE.netlify.app/">.
+  Hosted on Netlify and embedded into WordPress with an <iframe>
+  (see waterjet-contact-form.html for the embed snippet).
 
-  To instead paste the form directly into a WordPress Custom HTML
-  block (no iframe, no separate hosting), use the contents of the
-  <div id="wj-contact-form-root">...</div> block below on its own —
-  that's exactly what's in waterjet-contact-form.html.
+  Submissions are handled by Netlify Forms: Netlify detects this
+  <form> at deploy time, stores each submission (including file
+  attachments) and emails it to the address configured under
+  Site configuration > Notifications > Form submission notifications.
+  There is no other backend.
 ============================================================= -->
 <div id="wj-contact-form-root">
   <style>
@@ -195,7 +196,13 @@
 
   <h2>Send Us A Message</h2>
 
-  <form id="wj-contact-form" novalidate>
+  <form id="wj-contact-form" name="contact" method="POST" action="/" enctype="multipart/form-data"
+        data-netlify="true" netlify-honeypot="website" novalidate>
+    <!-- Required by Netlify Forms so it knows which form a submission belongs to -->
+    <input type="hidden" name="form-name" value="contact" />
+    <!-- Netlify uses this field as the subject line of the notification email -->
+    <input type="hidden" name="subject" value="New lead has entered through the website" />
+
     <div class="wj-row">
       <label for="wj-name">Your Name:</label>
       <input type="text" id="wj-name" name="name" autocomplete="name" />
@@ -212,7 +219,7 @@
 
     <div class="wj-row">
       <label for="wj-email2">Re-Type Email:</label>
-      <input type="email" id="wj-email2" name="email2" autocomplete="off" />
+      <input type="email" id="wj-email2" autocomplete="off" />
       <span class="wj-hint required">Required</span>
     </div>
     <div class="wj-field-error" id="err-email2">Email addresses do not match.</div>
@@ -230,7 +237,7 @@
     </div>
 
     <div class="wj-files">
-      <label>Attach design files: <span style="font-weight:normal; font-size:12.5px; color:#555;">(PDF, DXF, DWG, SVG, EPS, AI, STEP, ZIP, PNG, JPG — max 25MB each; scanned for viruses before delivery)</span></label>
+      <label>Attach design files: <span style="font-weight:normal; font-size:12.5px; color:#555;">(PDF, DXF, DWG, SVG, EPS, AI, STEP, ZIP, PNG, JPG — max 8MB total)</span></label>
       <div class="wj-file-row">
         <input type="file" id="wj-file-1" name="file1" accept=".pdf,.dxf,.dwg,.svg,.eps,.ai,.step,.stp,.zip,.png,.jpg,.jpeg" />
         <span id="wj-file-1-label">No file chosen</span>
@@ -275,19 +282,6 @@
 (function () {
   "use strict";
 
-  // ---------------------------------------------------------------
-  // SUPABASE CONFIG
-  // The form does NOT talk to the database or storage directly.
-  // It POSTs to a Supabase Edge Function ("submit-contact-form"),
-  // which validates the submission, virus-scans any attachments
-  // via VirusTotal, and only then saves anything. This keeps the
-  // service_role key and scanning logic off the public page entirely.
-  // ---------------------------------------------------------------
-  var SUPABASE_ENABLED = true;
-  var SUPABASE_URL = "https://qalamskqhayfimavldnf.supabase.co";
-  var SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhbGFtc2txaGF5ZmltYXZsZG5mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4NTg2MzEsImV4cCI6MjEwMTQzNDYzMX0.YN1n3QbPUkU3-yq0tIui7iuZMGMJSW2dc9aKOeviKnw";
-  var SUPABASE_FUNCTION_NAME = "submit-contact-form";
-
   var root = document.getElementById("wj-contact-form-root");
   var form = root.querySelector("#wj-contact-form");
   var nameEl = root.querySelector("#wj-name");
@@ -307,7 +301,8 @@
 
   var currentCaptcha = "";
 
-  var MAX_FILE_BYTES = 25 * 1024 * 1024; // 25MB, matches the Edge Function limit
+  // Netlify Forms rejects submissions larger than 8MB in total.
+  var MAX_TOTAL_FILE_BYTES = 8 * 1024 * 1024;
   var ALLOWED_EXTENSIONS = [".pdf", ".dxf", ".dwg", ".svg", ".eps", ".ai", ".png", ".jpg", ".jpeg", ".step", ".stp", ".zip"];
 
   function getExtension(filename) {
@@ -333,8 +328,8 @@
       labelEl.textContent = file.name + " (" + formatBytes(file.size) + ")";
 
       var errEl = root.querySelector("#" + errorId);
-      if (file.size > MAX_FILE_BYTES) {
-        errEl.textContent = "File is too large (max 25MB).";
+      if (file.size > MAX_TOTAL_FILE_BYTES) {
+        errEl.textContent = "File is too large (max 8MB).";
         errEl.classList.add("show");
         inputEl.value = "";
         labelEl.textContent = "No file chosen";
@@ -439,6 +434,17 @@
     if (!messageEl.value.trim()) { showError("err-message", true); ok = false; }
     else showError("err-message", false);
 
+    var totalBytes = (file1El.files[0] ? file1El.files[0].size : 0) +
+                     (file2El.files[0] ? file2El.files[0].size : 0);
+    var file2Err = root.querySelector("#err-file2");
+    if (totalBytes > MAX_TOTAL_FILE_BYTES) {
+      file2Err.textContent = "Attachments are too large together (max 8MB total).";
+      file2Err.classList.add("show");
+      ok = false;
+    } else if (file2Err.textContent.indexOf("too large together") !== -1) {
+      file2Err.classList.remove("show");
+    }
+
     if (captchaInput.value.trim().toUpperCase() !== currentCaptcha) {
       showError("err-captcha", true); ok = false;
     } else showError("err-captcha", false);
@@ -468,32 +474,13 @@
 
   clearBtn.addEventListener("click", resetForm);
 
-  // Submits the whole form (fields + files) as multipart/form-data to the
-  // Edge Function. The function itself uploads to a private quarantine
-  // bucket, scans attachments with VirusTotal, and only saves the message
-  // if everything comes back clean. No storage or DB write ever happens
-  // directly from this page.
-  async function submitToEdgeFunction(fd) {
-    var resp = await fetch(SUPABASE_URL + "/functions/v1/" + SUPABASE_FUNCTION_NAME, {
-      method: "POST",
-      headers: {
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": "Bearer " + SUPABASE_ANON_KEY
-        // Note: no Content-Type header — the browser sets the correct
-        // multipart/form-data boundary automatically for FormData bodies.
-      },
-      body: fd
-    });
-
-    var data = null;
-    try { data = await resp.json(); } catch (e) { /* ignore parse errors */ }
-
+  // Posts the form (fields + files) as multipart/form-data to Netlify Forms,
+  // which stores it and sends the notification email.
+  async function submitToNetlify(fd) {
+    var resp = await fetch("/", { method: "POST", body: fd });
     if (!resp.ok) {
-      var msg = (data && data.error) ? data.error : "Submission failed (" + resp.status + ").";
-      throw new Error(msg);
+      throw new Error("Submission failed (" + resp.status + "). Please try again.");
     }
-
-    return data;
   }
 
   form.addEventListener("submit", async function (e) {
@@ -511,40 +498,25 @@
       return;
     }
 
-    if (!SUPABASE_ENABLED) {
-      setStatus(
-        "Form validated successfully. Supabase is not configured yet — no data was sent. " +
-        "Fill in SUPABASE_URL / SUPABASE_ANON_KEY in the form's script to enable submissions.",
-        "error"
-      );
-      return;
-    }
-
     sendBtn.disabled = true;
     clearBtn.disabled = true;
     setStatus("Sending your message, please wait...", "");
 
     try {
-      var fd = new FormData();
-      fd.append("name", nameEl.value.trim());
-      fd.append("email", emailEl.value.trim());
-      fd.append("email2", email2El.value.trim());
-      fd.append("phone", phoneEl.value.trim());
-      fd.append("message", messageEl.value.trim());
-      fd.append("website", websiteEl.value.trim()); // honeypot
-      if (file1El.files[0]) fd.append("file1", file1El.files[0]);
-      if (file2El.files[0]) fd.append("file2", file2El.files[0]);
+      // Includes form-name, subject and the honeypot. The captcha and the
+      // re-typed email have no name attribute, so they are not sent.
+      var fd = new FormData(form);
+      fd.set("name", nameEl.value.trim());
+      fd.set("email", emailEl.value.trim());
+      fd.set("phone", phoneEl.value.trim());
+      fd.set("message", messageEl.value.trim());
+      if (!file1El.files[0]) fd.delete("file1");
+      if (!file2El.files[0]) fd.delete("file2");
 
-      var hasFiles = !!(file1El.files[0] || file2El.files[0]);
-      await submitToEdgeFunction(fd);
+      await submitToNetlify(fd);
 
       resetForm();
-      setStatus(
-        hasFiles
-          ? "Thank you! Your message has been sent. Attached files are automatically scanned for safety before we can view them, which may take a few minutes."
-          : "Thank you! Your message has been sent successfully.",
-        "success"
-      );
+      setStatus("Thank you! Your message has been sent successfully.", "success");
     } catch (err) {
       setStatus(err.message || "Sorry, something went wrong sending your message. Please try again.", "error");
     } finally {
