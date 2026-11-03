@@ -1,11 +1,6 @@
 # Static HTML page — no build step, no package.json.
-# Form submissions are handled by Netlify Forms, which detects the
-# <form data-netlify="true"> in index.html at deploy time. After each
-# submission Netlify runs netlify/functions/submission-created.js,
-# which forwards the lead to the n8n webhook that sends the email.
+# Netlify only serves index.html. The form posts submissions (with
+# attached files) directly to the n8n webhook, which sends the email.
 
 [build]
   publish = "."
-
-[functions]
-  directory = "netlify/functions"

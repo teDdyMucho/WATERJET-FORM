@@ -21,10 +21,9 @@
   Hosted on Netlify and embedded into WordPress with an <iframe>
   (see waterjet-contact-form.html for the embed snippet).
 
-  Submissions are handled by Netlify Forms: Netlify detects this
-  <form> at deploy time, stores each submission (including file
-  attachments) and emails it to the address configured under
-  Site configuration > Notifications > Form submission notifications.
+  On submit, the form posts its fields and attached files straight
+  to the n8n webhook (N8N_WEBHOOK_URL in the script below). The n8n
+  workflow emails the lead to the business with the files attached.
   There is no other backend.
 ============================================================= -->
 <div id="wj-contact-form-root">
@@ -196,12 +195,7 @@
 
   <h2>Send Us A Message</h2>
 
-  <form id="wj-contact-form" name="contact" method="POST" action="/" enctype="multipart/form-data"
-        data-netlify="true" netlify-honeypot="website" novalidate>
-    <!-- Required by Netlify Forms so it knows which form a submission belongs to -->
-    <input type="hidden" name="form-name" value="contact" />
-    <!-- Netlify uses this field as the subject line of the notification email -->
-    <input type="hidden" name="subject" value="New lead has entered through the website" />
+  <form id="wj-contact-form" novalidate>
 
     <div class="wj-row">
       <label for="wj-name">Your Name:</label>
@@ -237,7 +231,7 @@
     </div>
 
     <div class="wj-files">
-      <label>Attach design files: <span style="font-weight:normal; font-size:12.5px; color:#555;">(PDF, DXF, DWG, SVG, EPS, AI, STEP, ZIP, PNG, JPG — max 8MB total)</span></label>
+      <label>Attach design files: <span style="font-weight:normal; font-size:12.5px; color:#555;">(PDF, DXF, DWG, SVG, EPS, AI, STEP, ZIP, PNG, JPG — max 10MB total)</span></label>
       <div class="wj-file-row">
         <input type="file" id="wj-file-1" name="file1" accept=".pdf,.dxf,.dwg,.svg,.eps,.ai,.step,.stp,.zip,.png,.jpg,.jpeg" />
         <span id="wj-file-1-label">No file chosen</span>
@@ -282,6 +276,10 @@
 (function () {
   "use strict";
 
+  // n8n webhook that receives each submission and sends the email.
+  var N8N_WEBHOOK_URL = "https://primary-production-6722.up.railway.app/webhook/newlead-website-waterjet";
+  var EMAIL_SUBJECT = "New lead has entered through the website";
+
   var root = document.getElementById("wj-contact-form-root");
   var form = root.querySelector("#wj-contact-form");
   var nameEl = root.querySelector("#wj-name");
@@ -301,8 +299,9 @@
 
   var currentCaptcha = "";
 
-  // Netlify Forms rejects submissions larger than 8MB in total.
-  var MAX_TOTAL_FILE_BYTES = 8 * 1024 * 1024;
+  // Files travel as email attachments, so keep the total well under
+  // typical mail-server limits (n8n's own upload limit is 16MB).
+  var MAX_TOTAL_FILE_BYTES = 10 * 1024 * 1024;
   var ALLOWED_EXTENSIONS = [".pdf", ".dxf", ".dwg", ".svg", ".eps", ".ai", ".png", ".jpg", ".jpeg", ".step", ".stp", ".zip"];
 
   function getExtension(filename) {
@@ -329,7 +328,7 @@
 
       var errEl = root.querySelector("#" + errorId);
       if (file.size > MAX_TOTAL_FILE_BYTES) {
-        errEl.textContent = "File is too large (max 8MB).";
+        errEl.textContent = "File is too large (max 10MB).";
         errEl.classList.add("show");
         inputEl.value = "";
         labelEl.textContent = "No file chosen";
@@ -438,7 +437,7 @@
                      (file2El.files[0] ? file2El.files[0].size : 0);
     var file2Err = root.querySelector("#err-file2");
     if (totalBytes > MAX_TOTAL_FILE_BYTES) {
-      file2Err.textContent = "Attachments are too large together (max 8MB total).";
+      file2Err.textContent = "Attachments are too large together (max 10MB total).";
       file2Err.classList.add("show");
       ok = false;
     } else if (file2Err.textContent.indexOf("too large together") !== -1) {
@@ -474,10 +473,11 @@
 
   clearBtn.addEventListener("click", resetForm);
 
-  // Posts the form (fields + files) as multipart/form-data to Netlify Forms,
-  // which stores it and sends the notification email.
-  async function submitToNetlify(fd) {
-    var resp = await fetch("/", { method: "POST", body: fd });
+  // Posts the fields and files as multipart/form-data to the n8n webhook.
+  // The workflow replies only after the email has been sent, so an error
+  // here means the email did not go out.
+  async function submitToWebhook(fd) {
+    var resp = await fetch(N8N_WEBHOOK_URL, { method: "POST", body: fd });
     if (!resp.ok) {
       throw new Error("Submission failed (" + resp.status + "). Please try again.");
     }
@@ -503,17 +503,16 @@
     setStatus("Sending your message, please wait...", "");
 
     try {
-      // Includes form-name, subject and the honeypot. The captcha and the
-      // re-typed email have no name attribute, so they are not sent.
-      var fd = new FormData(form);
-      fd.set("name", nameEl.value.trim());
-      fd.set("email", emailEl.value.trim());
-      fd.set("phone", phoneEl.value.trim());
-      fd.set("message", messageEl.value.trim());
-      if (!file1El.files[0]) fd.delete("file1");
-      if (!file2El.files[0]) fd.delete("file2");
+      var fd = new FormData();
+      fd.append("subject", EMAIL_SUBJECT);
+      fd.append("name", nameEl.value.trim());
+      fd.append("email", emailEl.value.trim());
+      fd.append("phone", phoneEl.value.trim());
+      fd.append("message", messageEl.value.trim());
+      if (file1El.files[0]) fd.append("file1", file1El.files[0]);
+      if (file2El.files[0]) fd.append("file2", file2El.files[0]);
 
-      await submitToNetlify(fd);
+      await submitToWebhook(fd);
 
       resetForm();
       setStatus("Thank you! Your message has been sent successfully.", "success");

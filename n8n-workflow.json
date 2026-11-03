@@ -1,0 +1,68 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "newlead-website-waterjet",
+        "responseMode": "lastNode",
+        "responseData": "noData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "45855bc8-d772-4132-b511-c8e7890d72ce",
+      "name": "Webhook",
+      "webhookId": "32c9ae0c-2591-4fc5-b646-391cada2724e"
+    },
+    {
+      "parameters": {
+        "fromEmail": "mail@waterjetnaturalcutting.com",
+        "toEmail": "mail@waterjetnaturalcutting.com",
+        "subject": "={{ $json.body.subject || 'New lead has entered through the website' }}",
+        "emailFormat": "text",
+        "text": "=A new lead has submitted an inquiry through the Waterjet Natural Cutting website.\n\nLEAD DETAILS\n\nName: {{ $json.body.name }}\nEmail: {{ $json.body.email }}\nPhone: {{ $json.body.phone || 'Not provided' }}\n\nMESSAGE\n\n{{ $json.body.message }}\n\nATTACHMENTS\n\n{{ Object.values($binary || {}).map(f => f.fileName).join('\\n') || 'No file attached' }}\n{{ Object.keys($binary || {}).length ? '(The files are attached to this email.)' : '' }}\n\n---\n\nSubmitted: {{ $now.toFormat('MMMM dd, yyyy - hh:mm a') }}\n\nThis is an automated notification from the Waterjet Natural Cutting website.\n",
+        "options": {
+          "appendAttribution": false,
+          "attachments": "file1,file2",
+          "replyTo": "={{ $json.body.email }}"
+        }
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        272,
+        0
+      ],
+      "id": "b7c00e7c-474d-41aa-8730-107edf49d856",
+      "name": "Send an Email",
+      "webhookId": "5519dde0-b3ed-470d-b158-a2701d283722",
+      "credentials": {
+        "smtp": {
+          "id": "ZVxpdlXOMa2zKE1T",
+          "name": "water jet smtp"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
